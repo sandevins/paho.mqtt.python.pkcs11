@@ -39,11 +39,13 @@ import platform
 import select
 import socket
 
-ssl = None
-try:
-    import ssl
-except ImportError:
-    pass
+from M2Crypto import RSA, X509, SSL, m2, Engine
+
+#ssl = None
+#try:
+#    import ssl
+#except ImportError:
+#    pass
 
 socks = None
 try:
@@ -631,12 +633,21 @@ class Client(object):
         # for clean_start == MQTT_CLEAN_START_FIRST_ONLY
         self._mqttv5_first_connect = True
         self.suppress_exceptions = False # For callbacks
+        # ENGINE CONF
+        engine_module='/usr/lib/x86_64-linux-gnu/engines-1.1/libpkcs11.so'
+        pkcs11_module='/usr/lib/libBlackICEConnect_x64.so'
+        self.engine = Engine.load_dynamic_engine("pkcs11", engine_module)
+        self.engine.ctrl_cmd_string('MODULE_PATH', pkcs11_module)
+        self.engine.init()
 
     def __del__(self):
         self._reset_sockets()
 
     def _sock_recv(self, bufsize):
         try:
+            data = self._sock.read(bufsize)
+            print("Data is...")
+            print(data)
             return self._sock.recv(bufsize)
         except ssl.SSLWantReadError:
             raise BlockingIOError
@@ -646,7 +657,8 @@ class Client(object):
 
     def _sock_send(self, buf):
         try:
-            return self._sock.send(buf)
+            print(buf)
+            return self._sock.write(buf)
         except ssl.SSLWantReadError:
             raise BlockingIOError
         except ssl.SSLWantWriteError:
@@ -721,7 +733,7 @@ class Client(object):
 
         if context is None:
             if hasattr(ssl, 'create_default_context'):
-                context = ssl.create_default_context()
+                context = SSL.Context("sslv23")
             else:
                 raise ValueError('SSL/TLS context must be specified')
 
@@ -772,45 +784,54 @@ class Client(object):
         more information.
 
         Must be called before connect() or connect_async()."""
-        if ssl is None:
-            raise ValueError('This platform has no SSL/TLS.')
+        #if ssl is None:
+            #raise ValueError('This platform has no SSL/TLS.')
 
-        if not hasattr(ssl, 'SSLContext'):
+        #if not hasattr(ssl, 'SSLContext'):
             # Require Python version that has SSL context support in standard library
-            raise ValueError(
-                'Python 2.7.9 and 3.2 are the minimum supported versions for TLS.')
+            #raise ValueError(
+            #    'Python 2.7.9 and 3.2 are the minimum supported versions for TLS.')
 
         if ca_certs is None and not hasattr(ssl.SSLContext, 'load_default_certs'):
             raise ValueError('ca_certs must not be None.')
 
         # Create SSLContext object
-        if tls_version is None:
-            tls_version = ssl.PROTOCOL_TLSv1_2
+        #if tls_version is None:
+            #tls_version = ssl.PROTOCOL_TLSv1_2
             # If the python version supports it, use highest TLS version automatically
-            if hasattr(ssl, "PROTOCOL_TLS"):
-                tls_version = ssl.PROTOCOL_TLS
-        context = ssl.SSLContext(tls_version)
+            #if hasattr(ssl, "PROTOCOL_TLS"):
+                #tls_version = ssl.PROTOCOL_TLS
+        context = SSL.Context("sslv23")
 
         # Configure context
         if certfile is not None:
-            context.load_cert_chain(certfile, keyfile, keyfile_password)
+                x509 = X509.load_cert(certfile)
+                if keyfile is not None:
+                    pkey = self.engine.load_private_key(keyfile,'')
+                else:
+                    pkey = RSA.load_key_string(certfile)
+                m2.ssl_ctx_use_x509(context.ctx, x509.x509)
+                m2.ssl_ctx_use_pkey_privkey(context.ctx, pkey.pkey)
 
-        if cert_reqs == ssl.CERT_NONE and hasattr(context, 'check_hostname'):
-            context.check_hostname = False
+        #if certfile is not None:
+        #    context.load_cert_chain(certfile, keyfile, keyfile_password)
 
-        context.verify_mode = ssl.CERT_REQUIRED if cert_reqs is None else cert_reqs
+        #if cert_reqs == ssl.CERT_NONE and hasattr(context, 'check_hostname'):
+            #context.check_hostname = False
 
-        if ca_certs is not None:
-            context.load_verify_locations(ca_certs)
-        else:
-            context.load_default_certs()
+        #context.verify_mode = ssl.CERT_REQUIRED if cert_reqs is None else cert_reqs
 
-        if ciphers is not None:
-            context.set_ciphers(ciphers)
+        #if ca_certs is not None:
+            #context.load_verify_locations(ca_certs)
+        #else:
+            #context.load_default_certs()
+
+        #if ciphers is not None:
+            #context.set_ciphers(ciphers)
 
         self.tls_set_context(context)
 
-        if cert_reqs != ssl.CERT_NONE:
+        if cert_reqs != None:
             # Default to secure, sets context.check_hostname attribute
             # if available
             self.tls_insecure_set(False)
@@ -1049,14 +1070,15 @@ class Client(object):
             verify_host = not self._tls_insecure
             try:
                 # Try with server_hostname, even it's not supported in certain scenarios
-                sock = self._ssl_context.wrap_socket(
-                    sock,
-                    server_hostname=self._host,
-                    do_handshake_on_connect=False,
-                )
-            except ssl.CertificateError:
+                #sock = self._ssl_context.wrap_socket(
+                #    sock,
+                #    server_hostname=self._host,
+                #    do_handshake_on_connect=False,
+                #)
+                sock = SSL.Connection(ctx=self._ssl_context, sock=sock)
+            #except ssl.CertificateError:
                 # CertificateError is derived from ValueError
-                raise
+                #raise
             except ValueError:
                 # Python version requires SNI in order to handle server_hostname, but SNI is not available
                 sock = self._ssl_context.wrap_socket(
@@ -1070,10 +1092,12 @@ class Client(object):
                     verify_host = False
 
             sock.settimeout(self._keepalive)
-            sock.do_handshake()
+            sock.connect((self._host, self._port))
 
             if verify_host:
-                ssl.match_hostname(sock.getpeercert(), self._host)
+            #    ssl.match_hostname(sock.getpeercert(), self._host)
+                checker = SSL.Checker.Checker()
+                checker._match(host=self._host, certHost=sock.get_peer_cert().get_subject().CN)
 
         if self._transport == "websockets":
             sock.settimeout(self._keepalive)
@@ -1554,6 +1578,9 @@ class Client(object):
             if self._sock is None:
                 return MQTT_ERR_NO_CONN
             rc = self._packet_read()
+            if rc == MQTT_ERR_CONN_LOST: 
+                print("Connection Lost...")
+                return MQTT_ERR_CONN_LOST
             if rc > 0:
                 return self._loop_rc_handle(rc)
             elif rc == MQTT_ERR_AGAIN:
@@ -2375,6 +2402,8 @@ class Client(object):
                     MQTT_LOG_ERR, 'failed to receive on socket: %s', err)
                 return MQTT_ERR_CONN_LOST
             else:
+                if command is None:
+                    return MQTT_ERR_CONN_LOST
                 if len(command) == 0:
                     return MQTT_ERR_CONN_LOST
                 command, = struct.unpack("!B", command)

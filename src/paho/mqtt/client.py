@@ -50,6 +50,7 @@ from M2Crypto import RSA, X509, SSL, m2, Engine
 socks = None
 try:
     import socks
+    socks = True
 except ImportError:
     pass
 
@@ -645,19 +646,19 @@ class Client(object):
 
     def _sock_recv(self, bufsize):
         try:
-            data = self._sock.read(bufsize)
-            print("Data is...")
-            print(data)
+            #data = self._sock.read(bufsize)
+            #print("Data received is: %s"% data)
             return self._sock.recv(bufsize)
-        except ssl.SSLWantReadError:
+        except Exception as e:
+            print(e)
             raise BlockingIOError
-        except ssl.SSLWantWriteError:
-            self._call_socket_register_write()
-            raise BlockingIOError
+        #except ssl.SSLWantWriteError:
+            #self._call_socket_register_write()
+            #raise BlockingIOError
 
     def _sock_send(self, buf):
         try:
-            print(buf)
+            print('Data sent is: %s' % buf)
             return self._sock.write(buf)
         except ssl.SSLWantReadError:
             raise BlockingIOError
@@ -1076,6 +1077,7 @@ class Client(object):
                 #    do_handshake_on_connect=False,
                 #)
                 sock = SSL.Connection(ctx=self._ssl_context, sock=sock)
+                sock.set_tlsext_host_name(name=self._host)
             #except ssl.CertificateError:
                 # CertificateError is derived from ValueError
                 #raise
@@ -1093,6 +1095,9 @@ class Client(object):
 
             sock.settimeout(self._keepalive)
             sock.connect((self._host, self._port))
+
+            conn_state = sock.get_state()
+            print("Conn state is: " + conn_state)
 
             if verify_host:
             #    ssl.match_hostname(sock.getpeercert(), self._host)
@@ -3701,6 +3706,7 @@ class Client(object):
         proxy = self._get_proxy()
         addr = (self._host, self._port)
         source = (self._bind_address, self._bind_port)
+        print('proxy is: ' + str(proxy))
 
 
         if sys.version_info < (2, 7) or (3, 0) < sys.version_info < (3, 2):
